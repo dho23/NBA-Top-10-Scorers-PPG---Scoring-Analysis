@@ -1,0 +1,220 @@
+---
+title: "NBA Scoring Styles: 2024-2025 Season"
+author: "Darren Ho"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: cosmo
+    highlight: tango
+    df_print: paged
+  pdf_document:
+    toc: true
+    toc_depth: '2'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# How are top scorers getting their buckets?
+
+All you hear about when it comes to the way basketball is played nowadays are: "TOO MANY 3s", "THEY DON'T GET TO THE BASKET", "THE MID RANGE IS DEAD". As much as I would like to disagree with the crowd, it's hard not to notice those exact sentiments being played out on the basketball court at times. So with the culmination of the 2024-2025 NBA season just taking place, I thought I would go ahead and take a look for myself. With this project, I want to analyze the top 10 scorers and see how they really got their buckets.    
+
+```{r - Loading Data, warning=FALSE, message=FALSE}
+# nbastatR grabs NBA data
+# dplyr allows for Data Manipulation
+# tidyr allows for reshaping/organizing data
+# ggplot allows us to create visualizations
+# future and multisession function enables parallel computing - downloads big data faster!
+
+library(nbastatR)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(future)
+
+plan(multisession)
+```
+
+# Understanding the Data
+
+With the help of the nbastatR package, we can use the game_logs function to fetch all the game logs from the 2024-2025 NBA season. 
+
+```{r - Understanding the Data, warning=FALSE, message=FALSE}
+# Increase the connection buffer size to 1MB (adjust as needed)
+Sys.setenv("VROOM_CONNECTION_SIZE" = 1000000)
+
+# Fetching player game logs from the 2024-2025 NBA season
+logs <- game_logs(seasons = 2025, result_types = "player")
+
+# Checking the first couple lines of our data
+head(logs)
+
+```
+
+# Top 10 Scorers
+
+With the game logs at hand, I can now aggregate the data and find the top 10 scorers on the season. 
+
+```{r - Finding top 10 scorers}
+
+top_scorers <- logs %>% 
+  group_by(namePlayer) %>%                          # Grouping by player name
+  summarize(
+    total_points = sum(pts, na.rm = TRUE),          # Summing pts that player scored thru szn
+    games_played = n(),                             # Games each player played in that szn
+    ppg = round((total_points / games_played),1)    # Calc points per game (PPG), rounding to tenths
+  ) %>%
+  arrange(desc(ppg)) %>%                            # Ordering PPG from highest to lowest   
+  slice(1:10)                                       # Filtering data to only top 10 scorers
+
+top_scorers
+```
+
+We now have a list of the top 10 scorers from this season, starting with Shai Gilgeous-Alexander at a whopping 32.7 points per game and ending with Jalen Brunson at an exact 26 points per game. On official sites like NBA.com and basketballreference, the likes of Luka Doncic and Tyrese Maxey may not appear on the top 10 list due to the limited amount of games they were able to play in this year. However, for the sake of our analysis, we will keep them in our top 10. 
+
+# Scoring Breakdown
+
+With the top 10 points per game scorers in mind, we go a little further and breakdown the way each player scored. To do so, I split the way points were scored into 3 categories: Points from the 3-point range, points from the 2-point range, and then points from the free throw line. This gives us a raw look at how each player scored this season. In addition, I also created new columns that turned those raw numbers into percentages of how each player scored to give us a better understanding. 
+
+```{r - Scoring Breakdown}
+
+scoring_breakdown <- logs %>%
+  group_by(namePlayer) %>%                                # Grouping by player name
+  summarize(
+    total_points = sum(pts, na.rm = TRUE),                # Total points scored on the szn
+    games_played = n(),                                   # Games played
+    ppg = round(total_points / games_played, 2),          # Points per game 
+    points_3pt = sum(fg3m, na.rm = TRUE) * 3,             # Points from 3pt range
+    points_2pt = sum(fgm - fg3m, na.rm = TRUE) * 2,       # Points from 2pt range 
+    points_ft = sum(ftm, na.rm = TRUE)                    # Points from free throw line
+  ) %>%
+  mutate(                                                 # Creating new columns 
+    pct_3pt = round((points_3pt / total_points),4),       # Percentage of points from 3
+    pct_2pt = round((points_2pt / total_points),4),       # Percentage of points from 2
+    pct_ft  = round((points_ft / total_points),4)         # Percentage of points from free throw line
+  ) %>%
+  arrange(desc(ppg)) %>%                                  # Ordering by total points from highest to lowest
+  slice(1:10)                                             # Top 10
+
+scoring_breakdown
+```
+
+
+We now see the scoring breakdown of the top 10 scorers by points per game. With Shai leading the league in points per game this season, we see that a large portion of his points came from 2 point range: 1394 points to be exact, which came out to be approximately 56% of his total points scored. Approximately 20% his total points came from the 3 point range, while the remaining 24% came from the free throw line. In terms of who scored the most points from 2 point range this season, Giannis Antetokounmpo blew the field out the water, with a leading 76.5% of his total points coming from that area. As for who scored the most points from 3 point range, Anthony Edwards developed into a deadeye shooter this season with 44.1% of his total points coming from 3. To compare, Giannis only scored 42 points total from 3 this season, which only accounted for approximately 2% of his total points scored this season.  
+
+# Data Cleaning
+
+Looking at the raw points scored and where most of the points came from is one thing, but visualizing it is another. To do so, we reshape the scoring_breakdown dataframe so that its easier to plot. 
+
+```{r - Reshaping Data}
+
+scoring_breakdown_long <- scoring_breakdown %>%
+  select(namePlayer, points_2pt, points_3pt, points_ft) %>%   # Choosing the variables we want to plot
+  pivot_longer(                                               # Reshaping the data from wide to longer
+    cols = starts_with("points_"),
+    names_to = "type",                                        # Collapses the many columns into 
+    values_to = "points"                                      # just two: type and points
+  ) %>%
+  mutate(type = case_when(                                    # Quick clean up, shortening names  
+    type == "points_2pt" ~ "2PT",
+    type == "points_3pt" ~ "3PT",
+    type == "points_ft"  ~ "FT",
+  ))
+
+scoring_breakdown_long
+```
+
+We collapsed the data frame into one that is easier to plot and work with. We see that the columns have been reshaped where all the scoring types have been organized under one column: Type. The points scored have been organized under one column as well, following their respective Type. 
+
+```{r}
+scoring_percentages <- scoring_breakdown_long %>%
+  group_by(namePlayer) %>%
+  mutate(percent = points / sum(points)) %>%
+  ungroup()
+
+scoring_percentages
+```
+
+Here we take the reshaped data and create a new column that represents the percentage of where each players' points came from.
+
+
+# Visualization
+
+```{r - Scoring Volume}
+ggplot(scoring_breakdown_long, aes(x = reorder(namePlayer, -points), y = points, fill = type)) +
+  geom_bar(stat = "identity", width = 0.7) +
+  geom_text(aes(label = round(points)),
+            position = position_stack(vjust = 0.5),
+            size = 3, color = "white", fontface = "bold") +
+  scale_fill_manual(values = c("2PT" = "#1f77b4", "3PT" = "#ff7f0e", "FT" = "#2ca02c")) +
+  labs(
+    title = "Scoring Breakdown by Volume",
+    subtitle = "Breakdown of total points from 2PT, 3PT, and Free Throws",
+    x = "Player", y = "Total Points",
+    fill = "Scoring Type"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(size = 16, face = "bold"),
+    plot.subtitle = element_text(size = 12, face = "italic"),
+    legend.position = "top",
+    panel.grid.major.y = element_line(color = "gray90")
+  )
+
+```
+
+This bar chart helps us visualize the raw numbers of how each player scored their points this season. As we can see, Giannis scores his points in a drastically different way than his peers. 
+
+
+
+```{r - Scoring Style}
+
+ggplot(scoring_percentages, aes(x = reorder(namePlayer, -percent), y = percent, fill = type)) +
+  geom_bar(stat = "identity", width = 0.7) +
+  geom_text(aes(label = round(percent, 3)),
+            position = position_stack(vjust = 0.5),
+            size = 3, color = "white", fontface = "bold") +  
+  scale_y_continuous(labels = scales::percent_format()) +
+  scale_fill_manual(values = c("2PT" = "#1f77b4", "3PT" = "#ff7f0e", "FT" = "#2ca02c")) +
+  labs(
+    title = "Scoring Breakdown by Percentage",
+    subtitle = "Share of total points from 2PT, 3PT, and Free Throws",
+    x = NULL, y = "Percent of Total Points",
+    fill = "Scoring Type"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(size = 16, face = "bold"),
+    plot.subtitle = element_text(size = 12, face = "italic"),
+    legend.position = "top",
+    panel.grid.major.y = element_line(color = "gray90")
+  )
+
+```
+
+This bar chart is different from the previous. It's now scaled to 100%, which means this chart helps us visualize the scoring styles of each player, rather than the volume. This chart tells us that Jalen Brunson scored about 51.2% of his points from 2-point range, 27% from 3-point range, and 21.8% from the free throw line. 
+
+
+# Conclusion
+
+Of the top 10 scorers by points per game this season, only Anthony Edwards scored more points from the 3-point range than they did from the 2-point range. Jayson Tatum and Luke Doncic were the closest to having their points come equally from both the 2-point and 3-point range. Of the top 10, we had 6 players that had less than 30% of their total points scored come from the 3. Giannis Antetokounmpo and Nikola Jokic led the top 10 with a significant portion of their points coming from the 2-point range, with 76.5% and 62.6% respectively. Shai Gilgeous-Alexander led the top 10 in terms of points coming from the free throw line at 24.2%, while Jokic had the least amount come from the free throw line at 17.4%.
+
+
+
+# Future Improvements
+
+- Would like to dig deeper as 2-point range is a bit vague: Mid range, post ups, lay-ups
+- League wide analysis: Larger sample size to get an even bigger picture / allow for better comparisons, stronger conclusions
+- Year by year comparisons
+
+
+
+
+
+
+
